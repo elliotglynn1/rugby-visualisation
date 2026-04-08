@@ -1,0 +1,15 @@
+[project]
+name = "rugby"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "kloppy>=3.18.0",
+    "pandas>=3.0.2",
+    "polars>=1.39.3",
+    "pyarrow>=23.0.1",
+    "python-dateutil>=2.9.0.post0",
+    "rerun-sdk>=0.31.1",
+    "s3fs>=2026.3.0",
+]
