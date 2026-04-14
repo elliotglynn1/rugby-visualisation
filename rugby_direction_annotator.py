@@ -16,12 +16,12 @@ class RugbyDirectionAnnotator:
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("Rugby Direction Annotator")
-        self.root.geometry("1400x900")
+        self.root.geometry("2000x1400")
 
         # Rugby pitch dimensions (meters)
         self.pitch_length = 100  # goal line to goal line
         self.pitch_width = 73    # touchline to touchline
-        self.scale = 5           # pixels per meter
+        self.scale = 8           # pixels per meter
 
         # Canvas dimensions
         self.canvas_width = self.pitch_length * self.scale
@@ -35,16 +35,17 @@ class RugbyDirectionAnnotator:
         self.player_positions: dict[str, tuple[float, float, float]] = {}  # pid -> (x, y, z) in meters
 
         # Ball
-        self.ball_position = (50.0, 36.5)
+        self.ball_position = (50.0, 36.5, 1.0)
         self.selected_player: Optional[str] = None
 
         # Keyframes for animation
-        self.keyframes: list[dict] = []  # [{'positions': dict, 'ball': tuple}, ...]
+        self.keyframes: list[dict] = []  # [{'positions': dict, 'ball': tuple, 'selected_player': str}, ...]
         self.current_time = 0.0
         self.is_recording = False
 
         self.dragging_player: Optional[str] = None
         self.dragging_ball = False
+        self.selected_ball = False
 
         self.snap_radius = 3.0  # meters
         self.grid_snap = 1.0    # meters (set None to disable)
@@ -54,27 +55,27 @@ class RugbyDirectionAnnotator:
     def _create_ui(self) -> None:
         """Create the user interface."""
         # Control panel (left)
-        control_frame = Frame(self.root)
-        control_frame.pack(side="left", fill="y", padx=10, pady=10)
+        control_frame = Frame(self.root, bg="#1e1e1e", padx=15, pady=15)
+        control_frame.pack(side="left", fill="y", padx=20, pady=20)
 
         # File controls
-        Label(control_frame, text="Setup:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-        Button(control_frame, text="Lineout Formation", command=self._load_lineout, width=20, bg="#ffffcc").pack(fill="x", pady=2)
-        Button(control_frame, text="Load Custom Formation", command=self._load_custom_formation, width=20, bg="#ffddaa").pack(fill="x", pady=2)
-        self.csv_label = Label(control_frame, text="No data", font=("Arial", 9), fg="gray")
-        self.csv_label.pack(anchor="w")
+        Label(control_frame, text="Setup:", font=("Arial", 14, "bold"), bg="#1e1e1e", fg="#e0e0e0").pack(anchor="w", pady=10)
+        Button(control_frame, text="Lineout Formation", command=self._load_lineout, width=25, height=2, bg="#3498db", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        Button(control_frame, text="Load Custom Formation", command=self._load_custom_formation, width=25, height=2, bg="#e74c3c", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        self.csv_label = Label(control_frame, text="No data", font=("Arial", 10), fg="#a0a0a0", bg="#1e1e1e")
+        self.csv_label.pack(anchor="w", pady=5)
 
         # Playback controls
-        Label(control_frame, text="\nPlayback:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-        button_frame = Frame(control_frame)
-        button_frame.pack(fill="x", pady=5)
-        Button(button_frame, text="◀ Prev", command=self._prev_frame, width=8).pack(side="left", padx=2)
-        self.play_btn = Button(button_frame, text="▶ Play", command=self._toggle_play, width=8, bg="#90EE90")
-        self.play_btn.pack(side="left", padx=2)
-        Button(button_frame, text="Next ▶", command=self._next_frame, width=8).pack(side="left", padx=2)
+        Label(control_frame, text="\nPlayback:", font=("Arial", 14, "bold"), bg="#1e1e1e", fg="#e0e0e0").pack(anchor="w", pady=10)
+        button_frame = Frame(control_frame, bg="#1e1e1e")
+        button_frame.pack(fill="x", pady=10)
+        Button(button_frame, text="◀ Prev", command=self._prev_frame, width=10, height=2, bg="#95a5a6", fg="black", font=("Arial", 10, "bold"), relief="raised", bd=2).pack(side="left", padx=3)
+        self.play_btn = Button(button_frame, text="▶ Play", command=self._toggle_play, width=10, height=2, bg="#27ae60", fg="black", font=("Arial", 10, "bold"), relief="raised", bd=2)
+        self.play_btn.pack(side="left", padx=3)
+        Button(button_frame, text="Next ▶", command=self._next_frame, width=10, height=2, bg="#95a5a6", fg="black", font=("Arial", 10, "bold"), relief="raised", bd=2).pack(side="left", padx=3)
 
-        self.frame_label = Label(control_frame, text="Frame: 0/0", font=("Arial", 10))
-        self.frame_label.pack(anchor="w", pady=5)
+        self.frame_label = Label(control_frame, text="Frame: 0/0", font=("Arial", 12, "bold"), fg="#e0e0e0", bg="#1e1e1e")
+        self.frame_label.pack(anchor="w", pady=10)
 
         # Frame slider
         self.frame_slider = Scale(
@@ -83,36 +84,41 @@ class RugbyDirectionAnnotator:
             to=100,
             orient="horizontal",
             command=self._on_slider_change,
+            length=300,
+            sliderlength=20,
+            troughcolor="#555555",
+            bg="#1e1e1e",
+            fg="#e0e0e0"
         )
-        self.frame_slider.pack(fill="x", pady=5)
+        self.frame_slider.pack(fill="x", pady=10)
 
         # Recording controls
-        Label(control_frame, text="\nRecord Keyframes:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-        self.record_btn = Button(control_frame, text="Start Recording", command=self._toggle_recording, width=20, bg="#ffcccc")
-        self.record_btn.pack(fill="x", pady=2)
-        Button(control_frame, text="Capture Keyframe", command=self._capture_frame, width=20, bg="#ffffcc").pack(fill="x", pady=2)
-        Button(control_frame, text="Undo Last Keyframe", command=self._undo_keyframe, width=20, bg="#ffddaa").pack(fill="x", pady=2)
-        Label(control_frame, text="(Move players and ball,\nthen capture)", font=("Arial", 8), fg="gray").pack(anchor="w", pady=2)
-        Label(control_frame, text="Scroll wheel on a selected player to raise/lower Z.", font=("Arial", 8), fg="gray").pack(anchor="w", pady=2)
+        Label(control_frame, text="\nRecord Keyframes:", font=("Arial", 14, "bold"), bg="#1e1e1e", fg="#e0e0e0").pack(anchor="w", pady=10)
+        self.record_btn = Button(control_frame, text="Start Recording", command=self._toggle_recording, width=25, height=2, bg="#e67e22", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3)
+        self.record_btn.pack(fill="x", pady=5)
+        Button(control_frame, text="Capture Keyframe", command=self._capture_frame, width=25, height=2, bg="#f39c12", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        Button(control_frame, text="Undo Last Keyframe", command=self._undo_keyframe, width=25, height=2, bg="#d35400", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        Label(control_frame, text="(Move players and ball,\nthen capture)", font=("Arial", 9), fg="#a0a0a0", bg="#1e1e1e").pack(anchor="w", pady=5)
+        Label(control_frame, text="Scroll wheel on a selected player to raise/lower Z.", font=("Arial", 9), fg="#a0a0a0", bg="#1e1e1e").pack(anchor="w", pady=5)
 
-        self.record_label = Label(control_frame, text="Keyframes: 0", font=("Arial", 9), fg="gray")
-        self.record_label.pack(anchor="w", pady=5)
+        self.record_label = Label(control_frame, text="Keyframes: 0", font=("Arial", 11, "bold"), fg="#ff6b6b", bg="#1e1e1e")
+        self.record_label.pack(anchor="w", pady=10)
 
         # Save/load keyframes
-        Label(control_frame, text="\nSave/Load:", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
-        Button(control_frame, text="Save Animation", command=self._save_animation, width=20).pack(fill="x", pady=2)
-        Button(control_frame, text="Load Animation", command=self._load_animation, width=20).pack(fill="x", pady=2)
+        Label(control_frame, text="\nSave/Load:", font=("Arial", 14, "bold"), bg="#1e1e1e", fg="#e0e0e0").pack(anchor="w", pady=10)
+        Button(control_frame, text="Save Animation", command=self._save_animation, width=25, height=2, bg="#9b59b6", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        Button(control_frame, text="Load Animation", command=self._load_animation, width=25, height=2, bg="#8e44ad", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
 
         # Positions section
-        Label(control_frame, text="\nPositions:", font=("Arial", 10, "bold")).pack(anchor="w", pady=10)
-        Label(control_frame, text="(Drag players and ball\nwhen recording)", font=("Arial", 8), fg="gray").pack(anchor="w")
-        Button(control_frame, text="Export Formation", command=self._export_positions, width=20, bg="#ccffcc").pack(fill="x", pady=2)
-        Button(control_frame, text="Show Positions", command=self._show_positions, width=20).pack(fill="x", pady=2)
-        Button(control_frame, text="Export Rerun", command=self._export_rerun, bg="#ccffff").pack(fill="x", pady=2)
+        Label(control_frame, text="\nPositions:", font=("Arial", 14, "bold"), bg="#1e1e1e", fg="#e0e0e0").pack(anchor="w", pady=15)
+        Label(control_frame, text="(Drag players and ball\nwhen recording)", font=("Arial", 9), fg="#a0a0a0", bg="#1e1e1e").pack(anchor="w", pady=5)
+        Button(control_frame, text="Export Formation", command=self._export_positions, width=25, height=2, bg="#1abc9c", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        Button(control_frame, text="Show Positions", command=self._show_positions, width=25, height=2, bg="#16a085", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
+        Button(control_frame, text="Export Rerun", command=self._export_rerun, width=25, height=2, bg="#2ecc71", fg="black", font=("Arial", 11, "bold"), relief="raised", bd=3).pack(fill="x", pady=5)
 
         # Canvas (right)
-        canvas_frame = Frame(self.root)
-        canvas_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+        canvas_frame = Frame(self.root, bg="#2d5016", padx=20, pady=20)
+        canvas_frame.pack(side="right", fill="both", expand=True, padx=20, pady=20)
 
         self.canvas = Canvas(
             canvas_frame,
@@ -120,6 +126,8 @@ class RugbyDirectionAnnotator:
             height=self.canvas_height,
             bg="#2d5016",
             cursor="arrow",
+            highlightthickness=2,
+            highlightbackground="#1e3a0f"
         )
         self.canvas.pack()
 
@@ -156,18 +164,6 @@ class RugbyDirectionAnnotator:
         mid_x = self.canvas_width / 2
         self.canvas.create_line(mid_x, 0, mid_x, self.canvas_height, fill="white", width=2, tags="pitch")
 
-        # Centre circle
-        centre_r = 10 * self.scale
-        self.canvas.create_oval(
-            mid_x - centre_r,
-            self.canvas_height / 2 - centre_r,
-            mid_x + centre_r,
-            self.canvas_height / 2 + centre_r,
-            outline="white",
-            width=1,
-            tags="pitch",
-        )
-
     def _normalize_position(self, pos) -> tuple[float, float, float]:
         """Normalize a player position to an (x, y, z) tuple."""
         if isinstance(pos, (list, tuple)):
@@ -183,25 +179,11 @@ class RugbyDirectionAnnotator:
         self.frame_idx = 0
         self.player_positions = self._generate_coach_lineout()
         self.keyframes = []
-        self.ball_position = (50.0, 36.5)
+        self.ball_position = (50.0, 36.5, 1.0)
         self.is_playing = False
         self.play_btn.config(bg="#90EE90", text="▶ Play")
         self.frame_slider.config(to=0)
-        self.csv_label.config(text="Coach Lineout Formation", fg="black")
-        self._draw_frame()
-
-
-    def _load_lineout(self) -> None:
-        """Load a coach-designed lineout formation with forwards and backs."""
-        self.df = None
-        self.frame_idx = 0
-        self.player_positions = self._generate_coach_lineout()
-        self.keyframes = []
-        self.ball_position = (50.0, 36.5)
-        self.is_playing = False
-        self.play_btn.config(bg="#90EE90", text="▶ Play")
-        self.frame_slider.config(to=0)
-        self.csv_label.config(text="Coach Lineout Formation", fg="black")
+        self.csv_label.config(text="Coach Lineout Formation", fg="#e0e0e0")
         self._draw_frame()
 
     def _generate_coach_lineout(self) -> dict[str, tuple[float, float]]:
@@ -275,13 +257,22 @@ class RugbyDirectionAnnotator:
             raw_positions = data.get("positions", {})
             self.player_positions = {pid: self._normalize_position(pos) for pid, pos in raw_positions.items()}
             self.keyframes = data.get("keyframes", [])
-            self.ball_position = data.get("ball", (50.0, 36.5))
+            ball_pos = data.get("ball", (50.0, 36.5, 1.0))
+            # Ensure ball height is at least 1m
+            if isinstance(ball_pos, (list, tuple)) and len(ball_pos) >= 3:
+                x, y, z = ball_pos
+                ball_pos = (x, y, max(1.0, z))
+            elif isinstance(ball_pos, (list, tuple)) and len(ball_pos) == 2:
+                x, y = ball_pos
+                ball_pos = (x, y, 1.0)
+            self.ball_position = ball_pos
+            self.selected_player = data.get("selected_player")
             self.df = None
             self.frame_idx = 0
             self.is_playing = False
-            self.play_btn.config(bg="#90EE90", text="▶ Play")
+            self.play_btn.config(bg="#27ae60", text="▶ Play")
             self.frame_slider.config(to=max(0, (len(self.keyframes) - 1) * 10) if self.keyframes else 0)
-            self.csv_label.config(text=f"Custom: {Path(path).name}", fg="black")
+            self.csv_label.config(text=f"Custom: {Path(path).name}", fg="#e0e0e0")
             self._draw_frame()
             messagebox.showinfo("Success", f"Loaded formation from {Path(path).name}")
         except Exception as e:
@@ -309,7 +300,7 @@ class RugbyDirectionAnnotator:
             max_frames = len(self.df)
             self.frame_slider.config(to=max_frames - 1)
 
-            self.csv_label.config(text=f"Loaded: {Path(path).name}", fg="black")
+            self.csv_label.config(text=f"Loaded: {Path(path).name}", fg="#e0e0e0")
             self._draw_frame()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load CSV: {e}")
@@ -320,7 +311,7 @@ class RugbyDirectionAnnotator:
         self._draw_pitch()
 
         # Handle keyframes and interpolation
-        if self.keyframes and self.is_playing:
+        if self.keyframes and not (self.dragging_player or self.dragging_ball):
             self._interpolate_positions()
 
         if self.df is None:
@@ -330,7 +321,7 @@ class RugbyDirectionAnnotator:
                 for pid, pos in self.player_positions.items():
                     x, y, z = self._normalize_position(pos)
                     x_px = x * self.scale
-                    y_px = y * self.scale
+                    y_px = (y - z * 0.5) * self.scale  # Offset y by z height for visual jumping effect
                     if pid.startswith("home_"):
                         color = "#ff9933"
                     else:
@@ -344,10 +335,16 @@ class RugbyDirectionAnnotator:
                     self.canvas.create_text(x_px, y_px - 10, text=label, fill="white", font=("Arial", 8))
 
                 # Draw ball
-                bx, by, _ = self._normalize_position(self.ball_position)
+                bx, by, bz = self._normalize_position(self.ball_position)
                 bx_px = bx * self.scale
-                by_px = by * self.scale
-                self.canvas.create_oval(bx_px - 4, by_px - 4, bx_px + 4, by_px + 4, fill="#ffdc00", outline="orange", width=2)
+                by_px = (by - bz * 0.5) * self.scale  # Offset y by z height for visual effect
+                outline_color = "yellow" if self.selected_ball else "orange"
+                self.canvas.create_oval(bx_px - 4, by_px - 4, bx_px + 4, by_px + 4, fill="#ffdc00", outline=outline_color, width=2)
+                # Draw ball label and Z height
+                label = "Ball"
+                if abs(bz) > 0.01:
+                    label += f" {bz:.1f}m"
+                self.canvas.create_text(bx_px, by_px - 10, text=label, fill="white", font=("Arial", 8))
             else:
                 self.frame_label.config(text="No Formation Loaded")
             return
@@ -385,9 +382,20 @@ class RugbyDirectionAnnotator:
             return
 
         num_keyframes = len(self.keyframes)
+
+        # If exactly on a keyframe and not playing, show exact positions for editing
+        if not self.is_playing and self.current_time == int(self.current_time):
+            kf_idx = int(self.current_time)
+            if kf_idx < num_keyframes:
+                self.player_positions = {pid: self._normalize_position(pos) for pid, pos in self.keyframes[kf_idx]['positions'].items()}
+                self.ball_position = tuple(self.keyframes[kf_idx]['ball'])
+                self.selected_player = self.keyframes[kf_idx].get('selected_player')
+            return
+
         if num_keyframes == 1:
             self.player_positions = {pid: self._normalize_position(pos) for pid, pos in self.keyframes[0]['positions'].items()}
             self.ball_position = tuple(self.keyframes[0]['ball'])
+            self.selected_player = self.keyframes[0].get('selected_player')
             return
 
         # Find segment
@@ -395,6 +403,7 @@ class RugbyDirectionAnnotator:
         if segment >= num_keyframes - 1:
             self.player_positions = {pid: self._normalize_position(pos) for pid, pos in self.keyframes[-1]['positions'].items()}
             self.ball_position = tuple(self.keyframes[-1]['ball'])
+            self.selected_player = self.keyframes[-1].get('selected_player')
             return
 
         t = self.current_time - segment
@@ -429,8 +438,17 @@ class RugbyDirectionAnnotator:
             self._lerp(b1[2], b2[2], t),
         )
 
-    def _lerp(self, a: float, b: float, t: float) -> float:
-        return a + (b - a) * t
+        # Set selected player to the one from the starting keyframe of the segment
+        self.selected_player = self.keyframes[segment].get('selected_player')
+
+    def _update_current_keyframe(self) -> None:
+        """Update the current keyframe with current positions if exactly on a keyframe."""
+        if self.keyframes and not self.is_playing and self.current_time == int(self.current_time):
+            kf_idx = int(self.current_time)
+            if kf_idx < len(self.keyframes):
+                self.keyframes[kf_idx]['positions'] = dict(self.player_positions)
+                self.keyframes[kf_idx]['ball'] = self.ball_position
+                self.keyframes[kf_idx]['selected_player'] = self.selected_player
 
     def _build_interpolated_timeline(self, steps_per_segment: int = 10) -> list[dict]:
         timeline: list[dict] = []
@@ -444,6 +462,7 @@ class RugbyDirectionAnnotator:
             "frame": 0.0,
             "positions": first["positions"],
             "ball": first["ball"],
+            "selected_player": first.get("selected_player"),
         })
 
         for idx in range(len(self.keyframes) - 1):
@@ -485,6 +504,7 @@ class RugbyDirectionAnnotator:
                     "frame": frame_time,
                     "positions": positions,
                     "ball": ball,
+                    "selected_player": nex.get("selected_player") if alpha == 1.0 else None,
                 })
 
         return timeline
@@ -511,10 +531,11 @@ class RugbyDirectionAnnotator:
 
         keyframe = {
             'positions': dict(self.player_positions),
-            'ball': self.ball_position
+            'ball': self.ball_position,
+            'selected_player': self.selected_player
         }
         self.keyframes.append(keyframe)
-        self.record_label.config(text=f"Keyframes: {len(self.keyframes)}", fg="black")
+        self.record_label.config(text=f"Keyframes: {len(self.keyframes)}", fg="#e74c3c")
         messagebox.showinfo("Captured", f"Keyframe {len(self.keyframes)} captured")
 
         # Update slider
@@ -525,11 +546,12 @@ class RugbyDirectionAnnotator:
         """Remove the last keyframe."""
         if self.keyframes:
             self.keyframes.pop()
-            self.record_label.config(text=f"Keyframes: {len(self.keyframes)}")
+            self.record_label.config(text=f"Keyframes: {len(self.keyframes)}", fg="#e74c3c")
             if self.keyframes:
                 # Show previous keyframe
                 self.player_positions = dict(self.keyframes[-1]["positions"])
                 self.ball_position = self.keyframes[-1]["ball"]
+                self.selected_player = self.keyframes[-1].get('selected_player')
                 self.frame_slider.config(to=max(0, (len(self.keyframes) - 1) * 10))
             else:
                 self.frame_slider.config(to=0)
@@ -569,7 +591,7 @@ class RugbyDirectionAnnotator:
                 self.current_time += 0.1
                 self.frame_slider.set(int(self.current_time * 10))
                 self._draw_frame()
-                self.root.after(50, self._play_loop)  # ~20 FPS
+                self.root.after(1000, self._play_loop)  # ~20 FPS
             else:
                 self.is_playing = False
                 self.play_btn.config(bg="#90EE90", text="▶ Play")
@@ -583,7 +605,7 @@ class RugbyDirectionAnnotator:
             self.frame_idx += 1
             self.frame_slider.set(self.frame_idx)
             self._draw_frame()
-            self.root.after(50, self._play_loop)  # ~20 FPS
+            self.root.after(1000, self._play_loop)  # ~20 FPS
         else:
             self.is_playing = False
             self.play_btn.config(bg="#90EE90", text="▶ Play")
@@ -594,6 +616,7 @@ class RugbyDirectionAnnotator:
             if self.current_time < len(self.keyframes) - 1:
                 self.current_time = min(self.current_time + 1, len(self.keyframes) - 1)
                 self.frame_slider.set(int(self.current_time * 10))
+                self.selected_player = self.keyframes[int(self.current_time)].get('selected_player')
                 self._draw_frame()
             return
 
@@ -610,6 +633,7 @@ class RugbyDirectionAnnotator:
             if self.current_time > 0:
                 self.current_time = max(self.current_time - 1, 0)
                 self.frame_slider.set(int(self.current_time * 10))
+                self.selected_player = self.keyframes[int(self.current_time)].get('selected_player')
                 self._draw_frame()
             return
 
@@ -624,6 +648,10 @@ class RugbyDirectionAnnotator:
         """Handle slider change."""
         if self.keyframes:
             self.current_time = float(val) / 10.0
+            # Set selected player based on current segment
+            segment = int(self.current_time)
+            if segment < len(self.keyframes):
+                self.selected_player = self.keyframes[segment].get('selected_player')
             self._draw_frame()
             return
 
@@ -640,12 +668,14 @@ class RugbyDirectionAnnotator:
         """Start dragging player or ball."""
         if self.df is None and self.player_positions:
             # Check for ball
-            bx, by, _ = self._normalize_position(self.ball_position)
+            bx, by, bz = self._normalize_position(self.ball_position)
             bx_px = bx * self.scale
-            by_px = by * self.scale
+            by_px = (by - bz * 0.5) * self.scale  # Use same offset as drawing
             dist_ball = ((event.x - bx_px) ** 2 + (event.y - by_px) ** 2) ** 0.5
             if dist_ball < 10:
                 self.dragging_ball = True
+                self.selected_ball = True
+                self.selected_player = None
                 return
 
             # Check for players
@@ -657,12 +687,14 @@ class RugbyDirectionAnnotator:
                 if dist < 10:
                     self.dragging_player = pid
                     self.selected_player = pid
+                    self.selected_ball = False
                     return
 
     def _on_canvas_drag(self, event) -> None:
         """Continue dragging player or ball."""
         if self.dragging_ball:
-            self.ball_position = (event.x / self.scale, event.y / self.scale)
+            _, _, z = self._normalize_position(self.ball_position)
+            self.ball_position = (event.x / self.scale, event.y / self.scale, z)
             self._draw_frame()
             return
 
@@ -675,11 +707,7 @@ class RugbyDirectionAnnotator:
             return
 
     def _on_canvas_scroll(self, event) -> None:
-        """Adjust the selected player's height while scrolling."""
-        pid = self.dragging_player or self.selected_player
-        if not pid or pid not in self.player_positions:
-            return
-
+        """Adjust the selected player's or ball's height while scrolling."""
         if hasattr(event, "delta") and event.delta != 0:
             delta_z = (event.delta / 120.0) * 0.1
         elif getattr(event, "num", None) == 4:
@@ -689,9 +717,29 @@ class RugbyDirectionAnnotator:
         else:
             return
 
+        # Prefer ball adjustment if the mouse is over the ball or the ball is selected.
+        bx, by, bz = self._normalize_position(self.ball_position)
+        bx_px = bx * self.scale
+        by_px = (by - bz * 0.5) * self.scale  # Use same offset as drawing
+        dist_ball = ((event.x - bx_px) ** 2 + (event.y - by_px) ** 2) ** 0.5
+        if self.dragging_ball or self.selected_ball or dist_ball < 12:
+            x, y, z = self._normalize_position(self.ball_position)
+            z = max(1.0, z + delta_z)  # Minimum height of 1m for ball
+            self.ball_position = (x, y, z)
+            self.selected_ball = True
+            self.selected_player = None
+            self._update_current_keyframe()
+            self._draw_frame()
+            return
+
+        pid = self.dragging_player or self.selected_player
+        if not pid or pid not in self.player_positions:
+            return
+
         x, y, z = self._normalize_position(self.player_positions[pid])
         z = max(0.0, z + delta_z)
         self.player_positions[pid] = (x, y, z)
+        self._update_current_keyframe()
         self._draw_frame()
         return
 
@@ -699,11 +747,14 @@ class RugbyDirectionAnnotator:
         """Finish dragging."""
         if self.dragging_ball:
             self.dragging_ball = False
+            self.selected_ball = True
+            self._update_current_keyframe()
             self._draw_frame()
             return
 
         if self.dragging_player:
             self.dragging_player = None
+            self._update_current_keyframe()
             self._draw_frame()
             return
 
@@ -778,6 +829,7 @@ class RugbyDirectionAnnotator:
             "positions": self.player_positions,
             "keyframes": self.keyframes,
             "ball": self.ball_position,
+            "selected_player": self.selected_player,
             "scale": self.scale,
             "pitch_length": self.pitch_length,
             "pitch_width": self.pitch_width,
@@ -854,16 +906,26 @@ class RugbyDirectionAnnotator:
         try:
             data = json.loads(Path(path).read_text())
             self.keyframes = data.get("keyframes", [])
+            # Ensure all ball positions in keyframes have minimum 1m height
+            for kf in self.keyframes:
+                ball_pos = kf.get("ball", (50.0, 36.5, 1.0))
+                if isinstance(ball_pos, (list, tuple)) and len(ball_pos) >= 3:
+                    x, y, z = ball_pos
+                    kf["ball"] = (x, y, max(1.0, z))
+                elif isinstance(ball_pos, (list, tuple)) and len(ball_pos) == 2:
+                    x, y = ball_pos
+                    kf["ball"] = (x, y, 1.0)
             self.df = None
             self.frame_idx = 0
             self.current_time = 0.0
             self.is_playing = False
-            self.play_btn.config(bg="#90EE90", text="▶ Play")
+            self.play_btn.config(bg="#27ae60", text="▶ Play")
             self.frame_slider.config(to=max(0, (len(self.keyframes) - 1) * 10) if self.keyframes else 0)
-            self.record_label.config(text=f"Keyframes: {len(self.keyframes)}", fg="black")
+            self.record_label.config(text=f"Keyframes: {len(self.keyframes)}", fg="#e74c3c")
             if self.keyframes:
                 self.player_positions = {pid: self._normalize_position(pos) for pid, pos in self.keyframes[0]["positions"].items()}
                 self.ball_position = self.keyframes[0]["ball"]
+                self.selected_player = self.keyframes[0].get('selected_player')
             self._draw_frame()
             messagebox.showinfo("Success", f"Loaded animation with {len(self.keyframes)} keyframes")
         except Exception as e:

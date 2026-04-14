@@ -10,12 +10,6 @@ from typing import Union
 import rerun as rr
 
 
-def _circle_xy(cx: float, cy: float, r: float, z: float, segments: int = 64) -> list[tuple[float, float, float]]:
-    return [
-        (cx + r * math.cos(2.0 * math.pi * i / segments), cy + r * math.sin(2.0 * math.pi * i / segments), z)
-        for i in range(segments + 1)
-    ]
-
 
 def _rugby_pitch_entities(
     half_length_m: float,
@@ -144,20 +138,24 @@ def _interpolate_keyframes(
                 if pid in positions0 and pid in positions1:
                     x0, y0 = positions0[pid][:2]
                     x1, y1 = positions1[pid][:2]
-                    positions[pid] = (_lerp(x0, x1, alpha), _lerp(y0, y1, alpha))
+                    z0 = positions0[pid][2] if len(positions0[pid]) >= 3 else 0.0
+                    z1 = positions1[pid][2] if len(positions1[pid]) >= 3 else 0.0
+                    positions[pid] = (_lerp(x0, x1, alpha), _lerp(y0, y1, alpha), _lerp(z0, z1, alpha))
                 elif pid in positions0:
-                    positions[pid] = tuple(positions0[pid][:2])
+                    positions[pid] = tuple(positions0[pid])
                 else:
-                    positions[pid] = tuple(positions1[pid][:2])
+                    positions[pid] = tuple(positions1[pid])
 
-            ball = (_lerp(ball0[0], ball1[0], alpha), _lerp(ball0[1], ball1[1], alpha))
+            ball_z0 = ball0[2] if len(ball0) >= 3 else 0.0
+            ball_z1 = ball1[2] if len(ball1) >= 3 else 0.0
+            ball = (_lerp(ball0[0], ball1[0], alpha), _lerp(ball0[1], ball1[1], alpha), _lerp(ball_z0, ball_z1, alpha))
             interpolated.append((frame_time, positions, ball))
 
     last = timeline[-1]
     interpolated.append(
         (
             float(last.get("frame", len(timeline) - 1)),
-            {pid: tuple(pos[:2]) for pid, pos in last.get("positions", {}).items()},
+            {pid: tuple(pos) for pid, pos in last.get("positions", {}).items()},
             tuple(last.get("ball", [50.0, 36.5])),
         )
     )
@@ -176,11 +174,14 @@ def plot_animation_json(
     cylinder_radius_m: float = 0.38,
     ball_radius_m: float = 0.24,
     ball_height_m: float = 1.2,
+    viewpoint: str = "ball",
 ) -> Path:
     """
     Load a rugby animation JSON and log a 3D scene to Rerun: rugby pitch, ball, and players as cylinders.
 
-    JSON structure: metadata with pitch dimensions, timeline of keyframes with positions and ball.
+    Supports both formats:
+    - Timeline format: metadata with pitch dimensions, timeline of keyframes with positions and ball.
+    - Keyframes format: keyframes array with positions and ball (from rugby_direction_annotator.py).
 
     Data is written to an ``.rrd`` file. The viewer is opened via ``python -m rerun_cli``.
 
@@ -194,17 +195,8 @@ def plot_animation_json(
         If True, launch the Rerun viewer on the written ``.rrd`` after logging finishes.
     realtime
         If True, sleep between keyframes.
-    cylinder_height_m, cylinder_radius_m
-        Player body approximation.
-    ball_radius_m
-        Ball radius.
-    ball_height_m
-        Ball center height above the pitch, e.g. chest height.
-
-    Returns
-    -------
-    Path
-        Absolute path to the written ``.rrd`` file.
+    viewpoint
+        Camera viewpoint: 'ball' or player ID (e.g., 'home_9').
     """
     path = Path(json_path)
     out_rrd = Path(rrd_path) if rrd_path is not None else (path.parent / f"{path.stem}_rerun.rrd")
@@ -214,9 +206,47 @@ def plot_animation_json(
         data = json.load(f)
 
     metadata = data.get('metadata', {})
-    pitch_length = metadata.get('pitch_length', 100)
-    pitch_width = metadata.get('pitch_width', 73)
-    timeline = data.get('timeline', [])
+    pitch_length = metadata.get('pitch_length', data.get('pitch_length', 100))
+    pitch_width = metadata.get('pitch_width', data.get('pitch_width', 73))
+    scale = metadata.get('scale', data.get('scale', 8))
+    
+    # Handle both timeline and keyframes formats
+    timeline = data.get('timeline')
+    if timeline is None:
+        # Convert keyframes format to timeline format
+        keyframes = data.get('keyframes', [])
+        if keyframes:
+            timeline = []
+            for idx, keyframe in enumerate(keyframes):
+                timeline.append({
+                    "type": "keyframe",
+                    "frame": float(idx),
+                    "positions": keyframe.get("positions", {}),
+                    "ball": keyframe.get("ball", [50.0, 36.5]),
+                })
+            # Interpolate between keyframes
+            interpolated = _interpolate_keyframes(timeline, steps_per_segment=10)
+            timeline = []
+            for frame_time, positions, ball in interpolated:
+                timeline.append({
+                    "type": "interpolated",
+                    "frame": frame_time,
+                    "positions": positions,
+                    "ball": ball,
+                })
+        else:
+            timeline = []
+
+    # Ensure all ball positions have minimum height of 1m
+    for frame in timeline:
+        ball = frame.get('ball', [50.0, 36.5])
+        if isinstance(ball, (list, tuple)):
+            if len(ball) >= 3:
+                x, y, z = ball
+                frame['ball'] = (x, y, max(1.0, z))
+            elif len(ball) == 2:
+                x, y = ball
+                frame['ball'] = (x, y, 1.0)
 
     rr.init(app_name, spawn=False)
     rr.save(out_rrd)
@@ -231,16 +261,30 @@ def plot_animation_json(
 
         rr.set_time("frame", timestamp=frame)
 
-        # Center the view on the ball and apply a modest zoom.
+        # Calculate ball position
         bx, by = _animator_to_world(ball[0], ball[1], pitch_length=pitch_length, pitch_width=pitch_width)
-        rr.log("world", rr.Transform3D(translation=[-bx, -by, 0.0], scale=[1.4, 1.4, 1.4]))
+        ball_z = ball[2] if len(ball) >= 3 else ball_height_m
+
+        # Center the view based on viewpoint
+        if viewpoint == "ball":
+            vx, vy, vz = bx, by, ball_z
+        elif viewpoint in positions:
+            pos = positions[viewpoint]
+            vx, vy = _animator_to_world(pos[0], pos[1], pitch_length=pitch_length, pitch_width=pitch_width)
+            vz = pos[2] if len(pos) >= 3 else 0.0
+        else:
+            # Default to ball if invalid viewpoint
+            vx, vy, vz = bx, by, ball_z
+        
+        rr.log("world", rr.Transform3D(translation=[-vx, -vy, -vz + 2.0], scale=[1.4, 1.4, 1.4]))
 
         ball_z = ball[2] if len(ball) >= 3 else ball_height_m
+        # Rugby ball shape using ellipsoid (approx 30cm x 60cm x 30cm)
         rr.log(
             "world/ball",
-            rr.Points3D(
-                positions=[(bx, by, ball_z)],
-                radii=[ball_radius_m],
+            rr.Ellipsoids3D(
+                centers=[(bx, by, ball_z)],
+                half_sizes=[(0.3, 0.6, 0.3)],
                 colors=[(255, 220, 40)],
             ),
         )
@@ -296,12 +340,14 @@ def main() -> None:
     )
     p.add_argument("--no-spawn", action="store_true", help="Do not open the Rerun viewer after export.")
     p.add_argument("--realtime", action="store_true", help="Sleep between keyframes.")
+    p.add_argument("--viewpoint", default="ball", help="Camera viewpoint: 'ball' or player ID (e.g., 'home_9')")
     args = p.parse_args()
     out = plot_animation_json(
         args.json,
         rrd_path=args.rrd,
         spawn_viewer=not args.no_spawn,
         realtime=args.realtime,
+        viewpoint=args.viewpoint,
     )
     print(f"Wrote Rerun recording: {out}")
     if not args.no_spawn:
