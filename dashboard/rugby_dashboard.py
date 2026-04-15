@@ -4,18 +4,18 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from rugbypy.team import fetch_all_teams, fetch_team_stats
+from statistics_helper import StatisticsHelper
 
 # -----------------------------
-# PAGE CONFIG + DARK STYLE
+# PAGE CONFIG
 # -----------------------------
 st.set_page_config(layout="wide", page_title="Rugby Intelligence Dashboard")
-
 st.title("🏉 Rugby Intelligence Dashboard")
 
 TEAM_CACHE_FILE = "team_stats.parquet"
 
-ALLOWED_TEAMS = ["Scotland", "Edinburgh"]
 
 # -----------------------------
 # LOAD DATA
@@ -32,16 +32,15 @@ def load_team_stats(force_refresh=False):
             try:
                 stats = fetch_team_stats(team_id=row["team_id"])
                 if stats is not None and not stats.empty:
-                    stats["team_name"] = row["team_name"]
+                    stats["team"] = row["team"]
                     return stats
-            except:
+            except Exception:
                 return None
 
         all_stats = []
 
         with ThreadPoolExecutor(max_workers=30) as executor:
             futures = [executor.submit(fetch_team, row) for _, row in teams.iterrows()]
-
             for f in as_completed(futures):
                 r = f.result()
                 if r is not None:
@@ -50,108 +49,98 @@ def load_team_stats(force_refresh=False):
         df = pd.concat(all_stats, ignore_index=True)
         df.to_parquet(TEAM_CACHE_FILE, index=False)
 
-    # 🔥 HARD FILTER (CRITICAL)
-    df = df[df["team_name"].isin(ALLOWED_TEAMS)].copy()
-
+    df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce")
     return df
 
 
-# -----------------------------
-# SIDEBAR CONTROLS
-# -----------------------------
-force_refresh = st.sidebar.button("🔄 Refresh Data")
-
-metric_choice = st.sidebar.multiselect(
-    "📌 Metrics to view",
-    ["tries", "line_breaks", "tackles", "metres_carried", "turnovers_won"],
-    default=["tries", "line_breaks"]
-)
-
-show_raw = st.sidebar.checkbox("🔍 Show Raw Data", False)
+df = load_team_stats()
 
 # -----------------------------
-# LOAD DATA
+# TEAM SELECTOR
 # -----------------------------
-df = load_team_stats(force_refresh=force_refresh)
+teams = df["team"].dropna().unique()
+selected_team = st.sidebar.selectbox("Select Team", sorted(teams))
 
-df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce")
-
-teams = ALLOWED_TEAMS
-selected_team = st.sidebar.radio("Select Team", teams)
-
-team_df = df[df["team_name"] == selected_team].copy()
+team_df = df[df["team"] == selected_team].copy()
 team_df = team_df.sort_values("game_date")
 
 # -----------------------------
-# KPIs
+# SAFE NUMERIC FEATURES
 # -----------------------------
-st.subheader(f"📊 {selected_team} Performance on Average")
+def safe_mean(col):
+    return team_df[col].mean() if col in team_df.columns else np.nan
 
-c1, c2, c3, c4 = st.columns(4)
 
-c1.metric("Tries", round(team_df["tries"].mean(), 2))
-c2.metric("Line Breaks", round(team_df["line_breaks"].mean(), 2))
-c3.metric("Metres Carried", round(team_df["metres_carried"].mean(), 1))
-c4.metric("Tackles", round(team_df["tackles"].mean(), 1))
+# =========================================================
+# 🧠 TOP KPI ROW
+# =========================================================
+st.subheader(f"📊 {selected_team} Core Performance")
 
-# -----------------------------
-# TREND ANALYSIS
-# -----------------------------
-st.subheader("📈 Performance Trends")
+k1, k2, k3, k4, k5 = st.columns(5)
+
+k1.metric("Tries", round(safe_mean("tries"), 2))
+k2.metric("Line Breaks", round(safe_mean("line_breaks"), 2))
+k3.metric("Carries", round(safe_mean("carries"), 1))
+k4.metric("Metres Carried", round(safe_mean("metres_carried"), 1))
+k5.metric("Tackles Made", round(safe_mean("tackles_made"), 1))
+
+
+# =========================================================
+# 📈 TIME SERIES
+# =========================================================
+st.subheader("📈 Performance Over Time")
+
+metric_choice = st.multiselect(
+    "Metrics",
+    ["tries", "line_breaks", "22m_entries", "carries", "metres_carried", "tackles_made", "turnovers_won"],
+    default=["tries", "line_breaks", "22m_entries"]
+)
 
 fig = px.line(
     team_df,
     x="game_date",
     y=metric_choice,
-    title="Selected Metrics Over Time"
+    title="Performance Trends"
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# Rolling form
-if "tries" in team_df.columns:
-    team_df["rolling"] = team_df["tries"].rolling(window=3).mean()
 
-    fig2 = px.line(
+# =========================================================
+# 🔥 ROLLING FORM
+# =========================================================
+if "tries" in team_df.columns:
+    team_df["rolling_tries"] = team_df["tries"].rolling(3).mean()
+
+    fig_roll = px.line(
         team_df,
         x="game_date",
-        y="rolling",
-        title=f"Rolling Try Form"
+        y="rolling_tries",
+        title="3-Game Rolling Try Form"
     )
+    st.plotly_chart(fig_roll, use_container_width=True)
 
-    st.plotly_chart(fig2, use_container_width=True)
 
-# -----------------------------
-# DISTRIBUTION INSIGHTS
-# -----------------------------
-st.subheader("📊 Distribution Insights")
+# =========================================================
+# 🚀 ENDEAVOUR STATISTICS (UNCHANGED LOGIC)
+# =========================================================
+st.subheader("🚀 Endeavour Statistics")
 
-fig3 = px.box(
-    team_df,
-    y=metric_choice,
-    title="Performance Spread"
-)
-st.plotly_chart(fig3, use_container_width=True)
+comparison_df = StatisticsHelper.league_comparison(df, selected_team)
 
-# -----------------------------
-# TEAM DNA
-# -----------------------------
-st.subheader("🧬 Team DNA")
-
-profile = team_df[metric_choice].mean().reset_index()
-profile.columns = ["metric", "value"]
-
-fig6 = px.bar(
-    profile,
+fig_end = px.bar(
+    comparison_df,
     x="metric",
-    y="value",
-    title="Team Style Profile"
+    y="percentile",
+    color="team_value",
+    title="Endeavour Metrics vs League",
+    range_y=[0, 1]
 )
-st.plotly_chart(fig6, use_container_width=True)
 
-# -----------------------------
-# RAW DATA
-# -----------------------------
-if show_raw:
-    st.subheader("🔍 Raw Data")
-    st.dataframe(team_df)
+st.plotly_chart(fig_end, use_container_width=True)
+
+# =========================================================
+# 🔍 RAW DATA
+# =========================================================
+st.subheader("🔍 Raw Data")
+st.dataframe(team_df)
